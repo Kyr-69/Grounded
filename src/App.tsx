@@ -1,15 +1,18 @@
 import { useState } from "react";
 import {
   CalendarCheck,
-  History as HistoryIcon,
   ListTodo,
   Settings as SettingsIcon,
+  Trophy,
+  Zap,
 } from "lucide-react";
 import { AppProvider, useApp } from "@/lib/store";
 import { NotificationsManager } from "@/components/NotificationsManager";
+import { ActiveTaskBar } from "@/components/ActiveTaskBar";
 import { TodayScreen } from "@/screens/TodayScreen";
 import { RoutineScreen } from "@/screens/RoutineScreen";
-import { HistoryScreen } from "@/screens/HistoryScreen";
+import { RankScreen } from "@/screens/RankScreen";
+import { ConsistencyScreen } from "@/screens/ConsistencyScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
 import { cn } from "@/lib/utils";
 import type { Tab } from "@/types";
@@ -17,7 +20,8 @@ import type { Tab } from "@/types";
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "today", label: "Today", icon: ListTodo },
   { id: "routine", label: "Routine", icon: CalendarCheck },
-  { id: "history", label: "History", icon: HistoryIcon },
+  { id: "rank", label: "Rank", icon: Trophy },
+  { id: "consistency", label: "Consistency", icon: Zap },
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -49,9 +53,12 @@ function Shell() {
       <main className="flex-1 overflow-y-auto pb-20">
         {tab === "today" && <TodayScreen onGoToRoutine={() => setTab("routine")} />}
         {tab === "routine" && <RoutineScreen />}
-        {tab === "history" && <HistoryScreen />}
+        {tab === "rank" && <RankScreen />}
+        {tab === "consistency" && <ConsistencyScreen />}
         {tab === "settings" && <SettingsScreen />}
       </main>
+
+      <ActiveTaskBar />
 
       {/* Bottom tab bar */}
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
@@ -63,7 +70,7 @@ function Shell() {
                 key={id}
                 onClick={() => setTab(id)}
                 className={cn(
-                  "relative flex min-w-16 flex-col items-center gap-0.5 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors",
+                  "relative flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 text-[10px] font-medium transition-colors",
                   active ? "text-primary" : "text-muted-foreground hover:text-foreground"
                 )}
               >

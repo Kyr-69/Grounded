@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Moon, Sun, Bell, Sunrise, Globe } from "lucide-react";
+import { Moon, Sun, Bell, Sunrise, Globe, Download } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { isValidZone, zonedParts } from "@/lib/time";
 import type { Settings } from "@/types";
@@ -50,6 +50,22 @@ export function SettingsScreen() {
   const commitBoundary = async () => {
     if (boundaryDraft) await saveSettings(boundaryDraft);
     setBoundaryDraft(null);
+  };
+
+  const doExport = async () => {
+    try {
+      const { api } = await import("@/lib/api");
+      const json = await api.exportData();
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `grounded-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* export unavailable in this runtime */
+    }
   };
 
   const commitZone = async () => {
@@ -163,6 +179,26 @@ export function SettingsScreen() {
         <span className="text-sm font-semibold text-primary">
           {fmtHour(settings.day_start_hour)}
         </span>
+      </button>
+
+      {/* Data export */}
+      <button
+        type="button"
+        className="flex w-full items-center justify-between rounded-xl border border-border bg-card p-4 text-left"
+        onClick={doExport}
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-secondary">
+            <Download className="size-5" />
+          </div>
+          <div>
+            <p className="font-medium">Export data</p>
+            <p className="text-xs text-muted-foreground">
+              Save a JSON backup of your full history
+            </p>
+          </div>
+        </div>
+        <span className="text-xs text-muted-foreground">.json</span>
       </button>
 
       <p className="px-1 text-xs text-muted-foreground">

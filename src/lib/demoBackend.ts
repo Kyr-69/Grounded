@@ -268,6 +268,23 @@ export const demoApi = {
     save(s);
   },
 
+  /** Full JSON backup of demo state (mirrors the Rust export_data). */
+  exportData(): string {
+    const s = load();
+    return JSON.stringify(
+      {
+        app: "Grounded",
+        version: 1,
+        exported_at: new Date().toISOString(),
+        settings: s.settings,
+        tasks: s.tasks,
+        instances: s.instances,
+      },
+      null,
+      2
+    );
+  },
+
   reset() {
     localStorage.removeItem(KEY);
   },

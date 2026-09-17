@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import { api, inTauri } from "@/lib/api";
 import { nowMinutes, todayStr } from "@/lib/time";
+import { computeConsistency, type ConsistencyState } from "@/lib/progress";
 import type {
   DayPayload,
   HistoryEntry,
@@ -24,6 +25,7 @@ interface AppState {
   settings: Settings;
   history: HistoryEntry[];
   streak: number;
+  consistency: ConsistencyState;
   nowMins: number;
   error: string | null;
   refreshDay: (date?: string) => Promise<void>;
@@ -55,6 +57,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [streak, setStreak] = useState(0);
   const [nowMins, setNowMins] = useState(() => nowMinutes(DEFAULT_SETTINGS.time_zone));
   const [error, setError] = useState<string | null>(null);
+
+  const consistency = useMemo(() => computeConsistency(history), [history]);
 
   const guard = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
@@ -213,6 +217,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       settings,
       history,
       streak,
+      consistency,
       nowMins,
       error,
       refreshDay,
@@ -232,6 +237,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       settings,
       history,
       streak,
+      consistency,
       nowMins,
       error,
       refreshDay,

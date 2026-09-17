@@ -64,12 +64,18 @@ export const api = {
     return inTauri ? invoke<number>("get_streak") : demoApi.getStreak();
   },
   async getSettings(): Promise<Settings> {
-    return inTauri ? invoke<Settings>("get_settings") : demoApi.getSettings();
+    return inTauri ? invoke<Settings>("get_settings_cmd") : demoApi.getSettings();
   },
   async saveSettings(settings: Settings): Promise<void> {
     return inTauri
-      ? invoke<void>("save_settings", { settings })
+      ? invoke<void>("save_settings_cmd", { settings })
       : demoApi.saveSettings(settings);
+  },
+  /** Full JSON backup of everything the app stores locally. */
+  async exportData(): Promise<string> {
+    return inTauri
+      ? invoke<string>("export_data")
+      : demoApi.exportData();
   },
 };
 

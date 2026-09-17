@@ -742,6 +742,68 @@ fn save_settings_cmd(state: State<Db>, settings: Settings) -> Result<(), String>
     Ok(())
 }
 
+#[tauri::command]
+fn export_data(state: State<Db>) -> Result<String, String> {
+    use serde_json::json;
+
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+
+    let tasks: Vec<serde_json::Value> = {
+        let mut stmt = conn
+            .prepare("SELECT id, name, icon, color, start_minute, end_minute, days_mask, created_at FROM tasks ORDER BY id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "name": r.get::<_, String>(1)?,
+                    "icon": r.get::<_, String>(2)?,
+                    "color": r.get::<_, String>(3)?,
+                    "start_minute": r.get::<_, i64>(4)?,
+                    "end_minute": r.get::<_, i64>(5)?,
+                    "days_mask": r.get::<_, i64>(6)?,
+                    "created_at": r.get::<_, String>(7)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        rows
+    };
+
+    let instances: Vec<serde_json::Value> = {
+        let mut stmt = conn
+            .prepare("SELECT id, task_id, date, status, checked_at FROM task_instances ORDER BY date, id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "task_id": r.get::<_, i64>(1)?,
+                    "date": r.get::<_, String>(2)?,
+                    "status": r.get::<_, String>(3)?,
+                    "checked_at": r.get::<_, Option<String>>(4)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        rows
+    };
+
+    let settings = get_settings(&conn);
+
+    Ok(serde_json::to_string_pretty(&json!({
+        "app": "Grounded",
+        "version": 1,
+        "exported_at": chrono::Local::now().to_rfc3339(),
+        "settings": settings,
+        "tasks": tasks,
+        "instances": instances,
+    }))
+    .map_err(|e| e.to_string())?)
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -769,7 +831,8 @@ pub fn run() {
             get_history,
             get_streak,
             get_settings_cmd,
-            save_settings_cmd
+            save_settings_cmd,
+            export_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

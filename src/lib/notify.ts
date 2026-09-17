@@ -43,7 +43,8 @@ function fmtClock(minute: number): string {
 }
 
 /**
- * Schedule "window is open" reminders for the next 7 days.
+ * Schedule "window is open" reminders for the next 7 days, plus a
+ * "closing soon" heads-up 5 minutes before each window ends.
  * Fire-and-forget: failures are swallowed (notifications are a nicety,
  * the Rust core enforces the actual rules).
  */
@@ -52,7 +53,7 @@ export async function scheduleAll(tasks: RoutineTask[]): Promise<void> {
     await createChannel({
       id: CHANNEL_ID,
       name: "Routine reminders",
-      description: "Tells you when a task window opens",
+      description: "Tells you when a task window opens and before it closes",
       importance: Importance.High,
       lights: true,
       vibration: true,
@@ -69,24 +70,58 @@ export async function scheduleAll(tasks: RoutineTask[]): Promise<void> {
     let anyScheduled = false;
     for (const task of tasks) {
       const open = nextOpen(task);
-      if (!open) continue;
-      try {
-        await sendNotification({
-          title: `${task.icon} ${task.name}`,
-          body: `Your window is open until ${fmtClock(task.end_minute)}`,
-          channelId: CHANNEL_ID,
-          schedule: Schedule.at(open, true),
-        });
-        anyScheduled = true;
-      } catch {
-        /* scheduled notifications unsupported on this platform — ignore */
+      if (open) {
+        try {
+          await sendNotification({
+            title: `${task.icon} ${task.name}`,
+            body: `Your window is open until ${fmtClock(task.end_minute)}`,
+            channelId: CHANNEL_ID,
+            schedule: Schedule.at(open, true),
+          });
+          anyScheduled = true;
+        } catch {
+          /* scheduled notifications unsupported on this platform — ignore */
+        }
+      }
+
+      // "Closing soon" — 5 minutes before the window ends.
+      const closing = nextAt(task, task.end_minute - 5);
+      if (closing) {
+        try {
+          await sendNotification({
+            title: `${task.icon} ${task.name} — closing soon`,
+            body: `5 minutes left. Check it off before ${fmtClock(task.end_minute)} or it locks as missed.`,
+            channelId: CHANNEL_ID,
+            schedule: Schedule.at(closing, true),
+          });
+          anyScheduled = true;
+        } catch {
+          /* ignore */
+        }
       }
     }
-    if (!anyScheduled) {
-      // Desktop dev fallback: at least prove the channel works once.
-      // (No-op on platforms where immediate notifications are also blocked.)
-    }
+    void anyScheduled;
   } catch {
     /* notifications unavailable — ignore */
   }
+}
+
+/**
+ * Next occurrence Date at the given minute-of-day for this task's days
+ * (used for the closing-soon warning). Returns null if that moment has
+ * already passed on every matching day within a week.
+ */
+function nextAt(task: RoutineTask, minuteOfDay: number, from: Date = new Date()): Date | null {
+  if (task.days_mask === 0) return null;
+  const clamped = ((minuteOfDay % 1440) + 1440) % 1440;
+  for (let offset = 0; offset < 8; offset++) {
+    const d = new Date(from);
+    d.setDate(d.getDate() + offset);
+    const dow = dayIndexMon0(d);
+    if ((task.days_mask & (1 << dow)) === 0) continue;
+    const at = new Date(d);
+    at.setHours(Math.floor(clamped / 60), clamped % 60, 0, 0);
+    if (at > from) return at;
+  }
+  return null;
 }

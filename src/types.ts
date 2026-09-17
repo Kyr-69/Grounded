@@ -57,4 +57,4 @@ export interface TaskInput {
   days_mask: number;
 }
 
-export type Tab = "today" | "routine" | "history" | "settings";
+export type Tab = "today" | "routine" | "rank" | "consistency" | "settings";

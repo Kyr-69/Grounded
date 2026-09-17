@@ -12,12 +12,17 @@ import type {
   TaskInstance,
 } from "@/types";
 
-const KEY = "grounded-demo-v2"; // v1: pre-creation-day seeding bug
+const KEY = "grounded-demo-v3"; // v2: pre-kind/vacation era
 
 interface DemoState {
   tasks: RoutineTask[];
   instances: TaskInstance[];
   settings: Settings;
+  vacation_days: string[];
+  /** XP moved out of the history window — counted forever. */
+  xp_bank: number;
+  /** Days already banked, so advancing is idempotent. */
+  xp_banked_days: Record<string, number>;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -35,12 +40,25 @@ function load(): DemoState {
       // Tasks saved before per-task colors existed get the default green.
       for (const t of s.tasks) if (!t.color) t.color = "#34d399";
       for (const i of s.instances) if (i.task && !i.task.color) i.task.color = "#34d399";
+      // Tasks saved before daily/physical kinds existed default to daily.
+      for (const t of s.tasks) if (!t.kind) t.kind = "daily";
+      for (const i of s.instances) if (i.task && !i.task.kind) i.task.kind = "daily";
+      if (!s.vacation_days) s.vacation_days = [];
+      if (typeof s.xp_bank !== "number") s.xp_bank = 0;
+      if (!s.xp_banked_days) s.xp_banked_days = {};
       return s;
     }
   } catch {
     /* fall through to fresh state */
   }
-  return { tasks: [], instances: [], settings: DEFAULT_SETTINGS };
+  return {
+    tasks: [],
+    instances: [],
+    settings: DEFAULT_SETTINGS,
+    vacation_days: [],
+    xp_bank: 0,
+    xp_banked_days: {},
+  };
 }
 
 function save(state: DemoState) {
@@ -98,6 +116,18 @@ export const demoApi = {
     const isToday = date === todayStr;
     const nowMins = now.h * 60 + now.min;
 
+    // Vacation days stay empty: no seeding, no auto-fail.
+    if (s.vacation_days.includes(date)) {
+      s.instances = s.instances.filter((i) => i.date === date && i.status === "done");
+      save(s);
+      return {
+        date,
+        vacation: true,
+        instances: s.instances.filter((i) => i.date === date).map((i) => ({ ...i })),
+        stats: { total: 0, done: 0, failed: 0, pending: 0 },
+      };
+    }
+
     // Rollover: ensure every task scheduled today has an instance.
     if (isToday) {
       const bit = dowMon0(now);
@@ -153,7 +183,7 @@ export const demoApi = {
       failed: instances.filter((i) => i.status === "failed").length,
       pending: instances.filter((i) => i.status === "pending").length,
     };
-    return { date, instances: instances.map((i) => ({ ...i })), stats };
+    return { date, vacation: false, instances: instances.map((i) => ({ ...i })), stats };
   },
 
   checkTask(instanceId: number): { instance: TaskInstance; stats: DayPayload["stats"] } {
@@ -228,16 +258,23 @@ export const demoApi = {
   getHistory(days: number): HistoryEntry[] {
     const s = load();
     const now = partsNow(s.settings.time_zone);
-    const todayStr = dateStrOf(now);
     const out: HistoryEntry[] = [];
     for (let i = 0; i < days; i++) {
       const d = new Date(now.y, now.m - 1, now.d - i);
       const ds = dateStrOf({ y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() });
       const day = demoApi.getDay(ds); // also syncs rollover/fail for that date
       const pct = day.stats.total > 0 ? Math.round((day.stats.done / day.stats.total) * 100) : 0;
-      out.push({ date: ds, total: day.stats.total, done: day.stats.done, failed: day.stats.failed, completion_pct: pct });
+      out.push({
+        date: ds,
+        total: day.stats.total,
+        done: day.stats.done,
+        failed: day.stats.failed,
+        completion_pct: pct,
+        xp: dayXpFor(s, ds, day.stats),
+        vacation: s.vacation_days.includes(ds),
+        workout_minutes: workoutMinutesFor(s, ds),
+      });
     }
-    void todayStr;
     return out;
   },
 
@@ -268,6 +305,44 @@ export const demoApi = {
     save(s);
   },
 
+  /** Bank XP from days older than cutoff (idempotent per day). */
+  advanceXpBank(cutoffDate: string, multiplier: number): number {
+    const s = load();
+    const mult = Number.isFinite(multiplier) && multiplier >= 1 ? multiplier : 1;
+    const dates = [...new Set(s.instances.map((i) => i.date))]
+      .filter((d) => d < cutoffDate && !(d in s.xp_banked_days))
+      .sort();
+    let total = 0;
+    for (const d of dates) {
+      const day = demoApi.getDay(d);
+      const base = dayXpFor(s, d, day.stats);
+      const granted = Math.round(base * mult);
+      s.xp_banked_days[d] = granted;
+      total += granted;
+    }
+    s.xp_bank += total;
+    save(s);
+    return s.xp_bank;
+  },
+
+  getXpBank(): number {
+    return load().xp_bank;
+  },
+
+  setVacation(date: string, on: boolean): DayPayload {
+    const s = load();
+    if (on) {
+      if (!s.vacation_days.includes(date)) s.vacation_days.push(date);
+      s.instances = s.instances.filter((i) => i.date !== date || i.status === "done");
+    } else {
+      s.vacation_days = s.vacation_days.filter((d) => d !== date);
+      save(s);
+      return demoApi.getDay(date); // re-seeds like a normal day
+    }
+    save(s);
+    return demoApi.getDay(date);
+  },
+
   /** Full JSON backup of demo state (mirrors the Rust export_data). */
   exportData(): string {
     const s = load();
@@ -279,6 +354,9 @@ export const demoApi = {
         settings: s.settings,
         tasks: s.tasks,
         instances: s.instances,
+        vacation_days: s.vacation_days,
+        xp_bank: s.xp_bank,
+        xp_banked_days: s.xp_banked_days,
       },
       null,
       2
@@ -302,4 +380,32 @@ function statsFor(s: DemoState, date: string): DayPayload["stats"] {
 
 function nextId(list: { id: number }[]): number {
   return list.length === 0 ? 1 : Math.max(...list.map((x) => x.id)) + 1;
+}
+
+/** Minutes of completed physical-task windows on a date. */
+function workoutMinutesFor(s: DemoState, date: string): number {
+  return s.instances
+    .filter((i) => i.date === date && i.status === "done" && (i.task.kind ?? "daily") === "physical")
+    .reduce((acc, i) => acc + Math.max(i.task.end_minute - i.task.start_minute, 0), 0);
+}
+
+/** XP for one completed instance: physical = 1000/h, daily = flat 50. */
+export function xpForInstance(kind: string, startMinute: number, endMinute: number): number {
+  if (kind === "physical") {
+    const mins = Math.max(endMinute - startMinute, 0);
+    return Math.round(((mins / 60) * 1000) / 50) * 50;
+  }
+  return 50;
+}
+
+/** Base XP earned on a date (task rewards + perfect-day bonus). */
+function dayXpFor(s: DemoState, date: string, stats: DayPayload["stats"]): number {
+  if (stats.done === 0) return 0;
+  const done = s.instances.filter((i) => i.date === date && i.status === "done");
+  let xp = done.reduce(
+    (acc, i) => acc + xpForInstance(i.task.kind ?? "daily", i.task.start_minute, i.task.end_minute),
+    0
+  );
+  if (stats.total > 0 && stats.done === stats.total) xp += 800;
+  return xp;
 }

@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import { api, inTauri } from "@/lib/api";
 import { nowMinutes, todayStr } from "@/lib/time";
-import { computeConsistency, type ConsistencyState } from "@/lib/progress";
+import { computeConsistency, xpForTask, XP_PERFECT_DAY, type ConsistencyState } from "@/lib/progress";
 import type {
   DayPayload,
   HistoryEntry,
@@ -26,6 +26,8 @@ interface AppState {
   history: HistoryEntry[];
   streak: number;
   consistency: ConsistencyState;
+  /** XP banked from days that aged out of the history window. */
+  xpBank: number;
   nowMins: number;
   error: string | null;
   refreshDay: (date?: string) => Promise<void>;
@@ -36,6 +38,11 @@ interface AppState {
   updateTask: (id: number, input: TaskInput) => Promise<void>;
   deleteTask: (id: number) => Promise<void>;
   saveSettings: (s: Settings) => Promise<void>;
+  setVacation: (on: boolean) => Promise<void>;
+  xpPop: XpPop | null;
+  celebration: DayCelebration | null;
+  dismissXpPop: () => void;
+  dismissCelebration: () => void;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -46,6 +53,22 @@ const DEFAULT_SETTINGS: Settings = {
 };
 
 const AppContext = createContext<AppState | null>(null);
+
+/** Floating "+XP" toast shown right after a check-off. */
+export interface XpPop {
+  id: number;
+  amount: number;
+  physical: boolean;
+}
+
+/** Full-screen celebration when the last task of the day is checked off. */
+export interface DayCelebration {
+  id: number;
+  baseXp: number;
+  multiplier: number;
+  grantedXp: number;
+  stageTitle: string | null;
+}
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -59,6 +82,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const consistency = useMemo(() => computeConsistency(history), [history]);
+  const [xpBank, setXpBank] = useState(0);
+  const [xpPop, setXpPop] = useState<XpPop | null>(null);
+  const [celebration, setCelebration] = useState<DayCelebration | null>(null);
+  const dismissXpPop = useCallback(() => setXpPop(null), []);
+  const dismissCelebration = useCallback(() => setCelebration(null), []);
 
   const guard = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
@@ -110,6 +138,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (h) setHistory(h);
     const st = await guard(() => api.getStreak());
     if (st !== undefined) setStreak(st as unknown as number);
+    const bank = await guard(() => api.getXpBank());
+    if (bank !== undefined) setXpBank(bank as unknown as number);
   }, [guard]);
 
   useEffect(() => {
@@ -128,6 +158,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id);
   }, [settings.time_zone]);
 
+  // Bank XP from days that fell out of the 84-day history window, so Rank
+  // keeps counting the whole journey. Runs on load and whenever the oldest
+  // in-window date changes; the backend call is idempotent per day.
+  useEffect(() => {
+    if (!ready || history.length === 0) return;
+    const oldest = history.reduce((min, h) => (h.date < min ? h.date : min), history[0].date);
+    const mult = consistency.multiplier;
+    void (async () => {
+      const bank = await guard(() => api.advanceXpBank(oldest, mult));
+      if (bank !== undefined) setXpBank(bank as unknown as number);
+    })();
+  }, [ready, history, consistency.multiplier, guard]);
+
   // When the local day rolls over, refresh automatically.
   useEffect(() => {
     const today = todayStr(settings.day_start_hour, settings.time_zone);
@@ -138,18 +181,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const checkTask = useCallback(
     async (instanceId: number) => {
+      const prevDone = day?.stats.done ?? 0;
       const res = await guard(() => api.checkTask(instanceId));
       if (res && day) {
+        const instances = day.instances.map((i) =>
+          i.id === res.instance.id ? res.instance : i
+        );
         setDay({
           ...day,
-          instances: day.instances.map((i) =>
-            i.id === res.instance.id ? res.instance : i
-          ),
+          instances,
           stats: res.stats,
         });
+
+        // XP feedback: pop + haptic tick.
+        const t = res.instance.task;
+        const amount = xpForTask(t.kind ?? "daily", t.start_minute, t.end_minute);
+        setXpPop({ id: Date.now(), amount, physical: t.kind === "physical" });
+        try {
+          navigator.vibrate?.(15);
+        } catch {
+          /* haptics unavailable */
+        }
+
+        // Day complete: last pending task just got checked off.
+        if (
+          prevDone < res.stats.done &&
+          res.stats.total > 0 &&
+          res.stats.done === res.stats.total
+        ) {
+          const base =
+            instances
+              .filter((i) => i.status === "done")
+              .reduce(
+                (acc, i) =>
+                  acc + xpForTask(i.task.kind ?? "daily", i.task.start_minute, i.task.end_minute),
+                0
+              ) + XP_PERFECT_DAY;
+          const mult = consistency.multiplier;
+          setCelebration({
+            id: Date.now(),
+            baseXp: base,
+            multiplier: mult,
+            grantedXp: Math.round(base * mult),
+            stageTitle: consistency.stage?.title ?? null,
+          });
+          try {
+            navigator.vibrate?.([30, 60, 90]);
+          } catch {
+            /* haptics unavailable */
+          }
+        }
       }
     },
-    [guard, day]
+    [guard, day, consistency]
   );
 
   const uncheckTask = useCallback(
@@ -208,6 +292,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [guard, refreshAll]
   );
 
+  /** Toggle a vacation day for today (or un-vacation to return to work). */
+  const setVacation = useCallback(
+    async (on: boolean) => {
+      const date = todayStr(settings.day_start_hour, settings.time_zone);
+      const res = await guard(() => api.setVacation(date, on));
+      if (res) {
+        setDay(res);
+        if (on) setTasks((ts) => ts); // tasks list unchanged; day view is what empties
+      }
+      await refreshAll();
+    },
+    [guard, refreshAll, settings.day_start_hour, settings.time_zone]
+  );
+
   const value = useMemo<AppState>(
     () => ({
       ready,
@@ -218,6 +316,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       history,
       streak,
       consistency,
+      xpBank,
       nowMins,
       error,
       refreshDay,
@@ -228,8 +327,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateTask,
       deleteTask,
       saveSettings,
+      setVacation,
+      xpPop,
+      celebration,
+      dismissXpPop,
+      dismissCelebration,
     }),
     [
+      xpPop,
+      celebration,
+      dismissXpPop,
+      dismissCelebration,
       ready,
       offline,
       day,
@@ -238,6 +346,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       history,
       streak,
       consistency,
+      xpBank,
       nowMins,
       error,
       refreshDay,
@@ -248,6 +357,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateTask,
       deleteTask,
       saveSettings,
+      setVacation,
     ]
   );
 

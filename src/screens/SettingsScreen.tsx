@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Moon, Sun, Bell, Sunrise, Globe, Download } from "lucide-react";
+import { Moon, Sun, Bell, Sunrise, Globe, Download, Palmtree } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { isValidZone, zonedParts } from "@/lib/time";
 import type { Settings } from "@/types";
@@ -42,10 +42,11 @@ function zoneLabel(zone: string): string {
 }
 
 export function SettingsScreen() {
-  const { settings, saveSettings } = useApp();
+  const { settings, saveSettings, day, setVacation } = useApp();
   const [boundaryDraft, setBoundaryDraft] = useState<Settings | null>(null);
   const [tzDraft, setTzDraft] = useState<string | null>(null);
   const [tzError, setTzError] = useState<string | null>(null);
+  const isVacationToday = day?.vacation ?? false;
 
   const commitBoundary = async () => {
     if (boundaryDraft) await saveSettings(boundaryDraft);
@@ -179,6 +180,28 @@ export function SettingsScreen() {
         <span className="text-sm font-semibold text-primary">
           {fmtHour(settings.day_start_hour)}
         </span>
+      </button>
+
+      {/* Vacation day */}
+      <button
+        type="button"
+        className="flex w-full items-center justify-between rounded-xl border border-sky-400/40 bg-sky-400/5 p-4 text-left"
+        onClick={() => void setVacation(!isVacationToday)}
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-secondary">
+            <Palmtree className="size-5" />
+          </div>
+          <div>
+            <p className="font-medium">Vacation day</p>
+            <p className="text-xs text-muted-foreground">
+              {isVacationToday
+                ? "Today is a day off — streak safe, tap to end it"
+                : "Take today off — no tasks, streak stays safe"}
+            </p>
+          </div>
+        </div>
+        <Switch checked={isVacationToday} onCheckedChange={(v) => void setVacation(v)} />
       </button>
 
       {/* Data export */}

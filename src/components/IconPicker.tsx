@@ -1,17 +1,20 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, Search } from "lucide-react";
-import { ICON_CATEGORIES, POPULAR_ICONS } from "@/lib/icons";
+import { ICON_CATEGORIES, POPULAR_ICONS, PHYSICAL_ICONS } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import { EmojiIcon } from "@/components/EmojiIcon";
 
 interface Props {
   value: string;
   onChange: (icon: string) => void;
+  /** "physical" swaps the popular grid to the workout set. */
+  kind?: "daily" | "physical";
 }
 
-export function IconPicker({ value, onChange }: Props) {
+export function IconPicker({ value, onChange, kind = "daily" }: Props) {
   const [showAll, setShowAll] = useState(false);
   const [query, setQuery] = useState("");
+  const popular = kind === "physical" ? PHYSICAL_ICONS : POPULAR_ICONS;
 
   // Category names double as searchable text; icons match themselves.
   const filtered = useMemo(() => {
@@ -27,10 +30,10 @@ export function IconPicker({ value, onChange }: Props) {
 
   return (
     <div className="space-y-2">
-      {/* Popular grid (default view) */}
+      {/* Popular grid (default view) — set depends on task kind */}
       {!showAll && (
         <div className="grid grid-cols-8 gap-1.5">
-          {POPULAR_ICONS.map((ic) => (
+          {popular.map((ic) => (
             <IconCell
               key={`p-${ic}`}
               icon={ic}

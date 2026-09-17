@@ -77,6 +77,21 @@ export const api = {
       ? invoke<string>("export_data")
       : demoApi.exportData();
   },
+  /** Mark a date as a vacation day (streak-safe free day). */
+  async setVacation(date: string, on: boolean): Promise<DayPayload> {
+    return inTauri
+      ? invoke<DayPayload>("set_vacation", { date, on })
+      : demoApi.setVacation(date, on);
+  },
+  /** Bank XP from days older than the history window (idempotent). */
+  async advanceXpBank(cutoffDate: string, multiplier: number): Promise<number> {
+    return inTauri
+      ? invoke<number>("advance_xp_bank", { cutoffDate, multiplier })
+      : demoApi.advanceXpBank(cutoffDate, multiplier);
+  },
+  async getXpBank(): Promise<number> {
+    return inTauri ? invoke<number>("get_xp_bank") : demoApi.getXpBank();
+  },
 };
 
 /**

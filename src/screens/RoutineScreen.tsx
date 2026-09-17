@@ -13,6 +13,8 @@ import {
 import { cn } from "@/lib/utils";
 import { safeColor, TASK_COLORS } from "@/lib/colors";
 import { withAlpha } from "@/lib/colors";
+import { xpForTask, XP_PERFECT_DAY } from "@/lib/progress";
+import type { TaskKind } from "@/types";
 import { EmojiIcon } from "@/components/EmojiIcon";
 import { IconPicker } from "@/components/IconPicker";
 import type { RoutineTask, TaskInput } from "@/types";
@@ -53,6 +55,7 @@ interface FormState {
   start: string;
   end: string;
   days: number;
+  kind: TaskKind;
 }
 
 const emptyForm: FormState = {
@@ -62,6 +65,7 @@ const emptyForm: FormState = {
   start: "08:00",
   end: "08:30",
   days: 0b1111111,
+  kind: "daily",
 };
 
 export function RoutineScreen() {
@@ -98,6 +102,7 @@ export function RoutineScreen() {
       start: minsToHHMM(t.start_minute),
       end: minsToHHMM(t.end_minute),
       days: t.days_mask,
+      kind: t.kind ?? "daily",
     });
   };
 
@@ -110,6 +115,7 @@ export function RoutineScreen() {
       start_minute: hhmmToMins(form.start),
       end_minute: hhmmToMins(form.end),
       days_mask: form.days,
+      kind: form.kind,
     };
     if (input.end_minute <= input.start_minute) return; // window must be positive
     if (editing) await updateTask(editing.id, input);
@@ -132,6 +138,7 @@ export function RoutineScreen() {
       start_minute: start,
       end_minute: end,
       days_mask: t.days_mask,
+      kind: t.kind ?? "daily",
     });
     setInlineDraft(null);
   };
@@ -290,7 +297,14 @@ export function RoutineScreen() {
                           <EmojiIcon emoji={t.icon} className="size-6" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium">{t.name}</p>
+                          <p className="truncate font-medium">
+                            {t.name}
+                            {t.kind === "physical" && (
+                              <span className="ml-1.5 rounded-full bg-warning/15 px-1.5 py-0.5 align-middle text-[10px] font-bold text-warning">
+                                💪 +{xpForTask("physical", t.start_minute, t.end_minute)}
+                              </span>
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">
                             {fmtWindow(t.start_minute, t.end_minute)} · {maskLabel(t.days_mask)}
                           </p>
@@ -427,11 +441,58 @@ export function RoutineScreen() {
 
           {form && (
             <div className="space-y-4">
+              {/* Task type: daily vs physical */}
+              <div className="grid grid-cols-2 gap-1.5">
+                {(
+                  [
+                    ["daily", "🧘 Daily", "Flat +50 XP"],
+                    ["physical", "🏋️ Physical", "1000 XP per hour"],
+                  ] as [TaskKind, string, string][]
+                ).map(([k, label, hint]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setForm({ ...form, kind: k })}
+                    className={cn(
+                      "rounded-lg border px-2 py-2 text-center transition-colors",
+                      form.kind === k
+                        ? "border-primary bg-primary/10"
+                        : "border-border bg-secondary/50 hover:bg-secondary"
+                    )}
+                  >
+                    <p className="text-sm font-semibold">{label}</p>
+                    <p className="text-[10px] text-muted-foreground">{hint}</p>
+                  </button>
+                ))}
+              </div>
+
+              {/* Live XP preview */}
+              <div
+                className={cn(
+                  "rounded-lg border px-3 py-2 text-center text-xs font-semibold",
+                  form.kind === "physical"
+                    ? "border-warning/40 bg-warning/10 text-warning"
+                    : "border-border bg-secondary/40 text-muted-foreground"
+                )}
+              >
+                {(() => {
+                  const s = hhmmToMins(form.start);
+                  const e = hhmmToMins(form.end);
+                  const xp = xpForTask(form.kind, s, e > s ? e : s + 30);
+                  const mins = Math.max(e - s, 30);
+                  return form.kind === "physical" ? (
+                    <>💪 This workout is worth <span className="text-base font-black">+{xp} XP</span> ({mins}m)</>
+                  ) : (
+                    <>✅ +{xp} XP per check-off · perfect day adds +{XP_PERFECT_DAY}</>
+                  );
+                })()}
+              </div>
+
               <div className="space-y-1.5">
                 <Label htmlFor="task-name">Name</Label>
                 <Input
                   id="task-name"
-                  placeholder="Drink water"
+                  placeholder={form.kind === "physical" ? "Gym session" : "Drink water"}
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                 />
@@ -439,7 +500,11 @@ export function RoutineScreen() {
 
               <div className="space-y-1.5">
                 <Label>Icon</Label>
-                <IconPicker value={form.icon} onChange={(ic) => setForm({ ...form, icon: ic })} />
+                <IconPicker
+                  value={form.icon}
+                  onChange={(ic) => setForm({ ...form, icon: ic })}
+                  kind={form.kind}
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-3">

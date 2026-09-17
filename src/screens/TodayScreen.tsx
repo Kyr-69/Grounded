@@ -14,8 +14,9 @@ const GROUPS = ["Morning", "Afternoon", "Evening"] as const;
 type Filter = "All" | (typeof GROUPS)[number];
 
 export function TodayScreen({ onGoToRoutine }: { onGoToRoutine: () => void }) {
-  const { day, nowMins, settings, checkTask, uncheckTask, streak, offline } = useApp();
+  const { day, nowMins, settings, checkTask, uncheckTask, streak, offline, setVacation } = useApp();
   const [filter, setFilter] = useState<Filter>("All");
+  const onVacation = day?.vacation ?? false;
 
   const groups = useMemo(() => {
     const list = day?.instances ?? [];
@@ -119,8 +120,28 @@ export function TodayScreen({ onGoToRoutine }: { onGoToRoutine: () => void }) {
         </div>
       )}
 
+      {/* Vacation mode */}
+      {onVacation && (
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-sky-400/40 bg-sky-400/5 py-8 text-center">
+          <span className="text-4xl">🏖️</span>
+          <div>
+            <p className="font-semibold">Day off — vacation mode</p>
+            <p className="mt-1 max-w-xs text-sm text-muted-foreground">
+              No tasks today. Your streak and consistency run are safe; this day simply doesn't count.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            className="mt-1 rounded-xl"
+            onClick={() => void setVacation(false)}
+          >
+            Back to work
+          </Button>
+        </div>
+      )}
+
       {/* Empty state */}
-      {stats.total === 0 && (
+      {stats.total === 0 && !onVacation && (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border py-10 text-center">
           <span className="text-4xl">🌱</span>
           <div>
@@ -158,7 +179,7 @@ export function TodayScreen({ onGoToRoutine }: { onGoToRoutine: () => void }) {
       ))}
 
       <div className="pb-2 text-center text-[11px] text-muted-foreground">
-        tasks lock when their window closes
+        {onVacation ? "enjoy the rest — your run is preserved" : "tasks lock when their window closes"}
       </div>
     </div>
   );

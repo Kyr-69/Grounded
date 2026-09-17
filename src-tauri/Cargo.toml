@@ -1,6 +1,6 @@
 [package]
 name = "grounded"
-version = "0.1.0"
+version = "1.0.0"
 description = "Daily routine accountability app — build your routine, check off tasks inside their time windows, never miss one."
 authors = ["you"]
 edition = "2021"

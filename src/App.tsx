@@ -9,6 +9,8 @@ import {
 import { AppProvider, useApp } from "@/lib/store";
 import { NotificationsManager } from "@/components/NotificationsManager";
 import { ActiveTaskBar } from "@/components/ActiveTaskBar";
+import { XpPop } from "@/components/XpPop";
+import { DayCelebration } from "@/components/DayCelebration";
 import { TodayScreen } from "@/screens/TodayScreen";
 import { RoutineScreen } from "@/screens/RoutineScreen";
 import { RankScreen } from "@/screens/RankScreen";
@@ -59,6 +61,8 @@ function Shell() {
       </main>
 
       <ActiveTaskBar />
+      <XpPop />
+      <DayCelebration />
 
       {/* Bottom tab bar */}
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">

@@ -1,15 +1,14 @@
 /**
  * Icon catalog for tasks.
- * POPULAR_ICONS is the curated default shown in the picker;
+ * POPULAR_ICONS is the curated default shown in the picker for DAILY tasks;
+ * PHYSICAL_ICONS is the workout set shown for PHYSICAL tasks.
  * ICON_CATEGORIES holds every icon grouped by sub-domain ("Show all").
  */
 export const POPULAR_ICONS: string[] = [
   // hydration
   "💧", "🥤", "🚰",
-  // movement
-  "🏃", "🏋️", "💪", "🚴", "🏊", "🧘",
-  // sports
-  "⚽", "🏀", "🏸", "🏓", "🥊",
+  // mindfulness (movement emojis live in the physical set)
+  "🧘",
   // learning
   "📚", "📖", "📝", "✏️", "🎓", "🧠",
   // coding
@@ -34,6 +33,23 @@ export const POPULAR_ICONS: string[] = [
   "🏠", "🛒", "💰", "📦",
   // feels
   "❤️", "✨", "🌈",
+];
+
+/** Workout/movement emojis — offered when the task kind is "physical". */
+export const PHYSICAL_ICONS: string[] = [
+  // movement
+  "🏃", "🏃‍♂️", "🏃‍♀️", "🚶", "🚶‍♂️", "🚶‍♀️",
+  "🏋️", "🏋️‍♂️", "🏋️‍♀️", "💪", "🤸", "🤸‍♂️", "🤸‍♀️",
+  "🚴", "🚴‍♂️", "🚴‍♀️", "🏊", "🏊‍♂️", "🏊‍♀️",
+  "🧗", "🧎", "🏄", "🛹", "🛼",
+  // sports
+  "⚽", "🏀", "🏈", "🎾", "🏐", "🏸", "🏓", "🥊", "🥋", "⛳", "🏹",
+  // mind-body
+  "🧘", "🧘‍♂️", "🧘‍♀️",
+  // rewards
+  "🥇", "🥈", "🥉", "🏆", "🎖️",
+  // body
+  "🦵", "🦶", "🫀",
 ];
 
 export interface IconCategory {

@@ -9,9 +9,10 @@ import { Trophy } from "lucide-react";
  * and the consistency multiplier that amplifies XP.
  */
 export function RankScreen() {
-  const { history, consistency } = useApp();
+  const { history, consistency, xpBank } = useApp();
   const mult = consistency?.multiplier ?? 1;
-  const xp = totalXp(history, mult);
+  const windowXp = totalXp(history, mult);
+  const xp = xpBank + windowXp;
   const prog = rankFor(xp);
 
   return (
@@ -31,6 +32,11 @@ export function RankScreen() {
           {prog.rank.name}
         </p>
         <p className="mt-1 text-3xl font-black tabular-nums">{xp.toLocaleString()} XP</p>
+        {xpBank > 0 && (
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {xpBank.toLocaleString()} banked · {windowXp.toLocaleString()} recent 12 weeks
+          </p>
+        )}
 
         <div className="mt-4">
           <div className="h-2 overflow-hidden rounded-full bg-secondary">

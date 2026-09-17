@@ -1,6 +1,7 @@
 import { Check, X, Lock, Clock, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { safeColor, withAlpha } from "@/lib/colors";
+import { xpForTask } from "@/lib/progress";
 import { EmojiIcon } from "@/components/EmojiIcon";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,8 +31,10 @@ export function TaskCard({ instance, nowMins, onToggle }: Props) {
   const done = effective === "done";
   const failed = effective === "failed";
 
-  const canCheck = active && status === "pending";
-  const canUncheck = active && status === "done";
+  // Window liveness comes from ws (wall clock), not effective — a done task
+  // inside its open window can still be unchecked.
+  const canCheck = status === "pending" && ws === "active";
+  const canUncheck = status === "done" && ws === "active";
 
   return (
     <div
@@ -83,6 +86,11 @@ export function TaskCard({ instance, nowMins, onToggle }: Props) {
               style={{ background: withAlpha(color, 0.2), color }}
             >
               Done
+            </span>
+          )}
+          {task.kind === "physical" && !failed && (
+            <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-bold text-warning">
+              💪 +{xpForTask("physical", task.start_minute, task.end_minute)} XP
             </span>
           )}
           {failed && (

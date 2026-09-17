@@ -1,5 +1,7 @@
 export type TaskStatus = "pending" | "done" | "failed";
 
+export type TaskKind = "daily" | "physical";
+
 export interface RoutineTask {
   id: number;
   name: string;
@@ -9,6 +11,7 @@ export interface RoutineTask {
   end_minute: number;
   days_mask: number; // bit 0 = Monday ... bit 6 = Sunday
   created_at: string;
+  kind: TaskKind; // physical tasks earn duration-scaled XP
 }
 
 export interface TaskInstance {
@@ -29,6 +32,7 @@ export interface DayStats {
 
 export interface DayPayload {
   date: string;
+  vacation: boolean;
   instances: TaskInstance[];
   stats: DayStats;
 }
@@ -39,6 +43,9 @@ export interface HistoryEntry {
   done: number;
   failed: number;
   completion_pct: number;
+  xp: number; // base XP earned that day (before consistency multiplier)
+  vacation: boolean; // planned day off — shown blue on the heatmap
+  workout_minutes: number; // completed physical-task time that day
 }
 
 export interface Settings {
@@ -55,6 +62,7 @@ export interface TaskInput {
   start_minute: number;
   end_minute: number;
   days_mask: number;
+  kind: TaskKind;
 }
 
 export type Tab = "today" | "routine" | "rank" | "consistency" | "settings";

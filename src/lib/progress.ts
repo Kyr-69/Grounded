@@ -83,15 +83,15 @@ export interface ConsistencyStage {
 
 export const CONSISTENCY_STAGES: ConsistencyStage[] = [
   { stage: 1, title: "Spark", days: 3, multiplier: 1.0 },
-  { stage: 2, title: "Momentum", days: 7, multiplier: 1.05 },
-  { stage: 3, title: "Rhythm", days: 14, multiplier: 1.1 },
-  { stage: 4, title: "Locked In", days: 30, multiplier: 1.2 },
-  { stage: 5, title: "Deep Focus", days: 60, multiplier: 1.35 },
-  { stage: 6, title: "Iron Will", days: 100, multiplier: 1.5 },
-  { stage: 7, title: "Relentless", days: 150, multiplier: 1.75 },
-  { stage: 8, title: "Apex", days: 210, multiplier: 2.0 },
-  { stage: 9, title: "Mastery", days: 300, multiplier: 2.5 },
-  { stage: 10, title: "Unstoppable", days: 365, multiplier: 3.0 },
+  { stage: 2, title: "Momentum", days: 7, multiplier: 1.1 },
+  { stage: 3, title: "Rhythm", days: 14, multiplier: 1.2 },
+  { stage: 4, title: "Locked In", days: 30, multiplier: 1.3 },
+  { stage: 5, title: "Deep Focus", days: 60, multiplier: 1.5 },
+  { stage: 6, title: "Iron Will", days: 100, multiplier: 1.75 },
+  { stage: 7, title: "Relentless", days: 150, multiplier: 2.0 },
+  { stage: 8, title: "Apex", days: 210, multiplier: 2.5 },
+  { stage: 9, title: "Mastery", days: 300, multiplier: 3.0 },
+  { stage: 10, title: "Unstoppable", days: 365, multiplier: 5.0 },
 ];
 
 /** Qualifying day = ≥90% completion with at least one task. */
@@ -167,6 +167,16 @@ export function multiplierFor(run: number): number {
 
 export const XP_PER_TASK = 50;
 export const XP_PERFECT_DAY = 800;
+/** Physical tasks: 1000 XP per full hour of window (30m=500, 1h=1000, 2h=2000). */
+export const XP_PER_PHYSICAL_HOUR = 1000;
+
+export function xpForTask(kind: string, startMinute: number, endMinute: number): number {
+  if (kind === "physical") {
+    const mins = Math.max(endMinute - startMinute, 0);
+    return Math.round(((mins / 60) * XP_PER_PHYSICAL_HOUR) / 50) * 50;
+  }
+  return XP_PER_TASK;
+}
 
 /**
  * Base XP for a day, before the consistency multiplier:
@@ -208,7 +218,19 @@ export function rankFor(xp: number): RankProgress {
   return { rank, next, into, span, pct: Math.min(100, Math.round((into / span) * 100)) };
 }
 
-/** Total XP across a history window + live total override. */
-export function totalXp(history: { total: number; done: number }[], multiplier: number): number {
-  return history.reduce((acc, h) => acc + dayXp(h.done, h.total, multiplier), 0);
+/** Total XP across a history window, multiplier applied per qualifying day. */
+export function totalXp(
+  history: { total: number; done: number; xp?: number }[],
+  multiplier: number
+): number {
+  return history.reduce((acc, h) => {
+    // Recorded per-day XP already includes task rewards + perfect-day bonus;
+    // fall back to estimates for entries written before XP tracking existed.
+    const base = h.xp ?? baseXpForDay(h.done, h.total);
+    const qualifiesDay = qualifies(
+      h.total === 0 ? 0 : Math.round((h.done / h.total) * 100),
+      h.total
+    );
+    return acc + Math.round(base * (qualifiesDay ? multiplier : 1));
+  }, 0);
 }

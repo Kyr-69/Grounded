@@ -20,6 +20,7 @@ struct RoutineTask {
     end_minute: i64,
     days_mask: i64, // bit 0 = Monday ... bit 6 = Sunday
     created_at: String,
+    kind: String, // "daily" | "physical" — physical tasks earn scaled XP
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +31,7 @@ struct TaskInput {
     start_minute: i64,
     end_minute: i64,
     days_mask: i64,
+    kind: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -53,6 +55,7 @@ struct DayStats {
 #[derive(Debug, Serialize)]
 struct DayPayload {
     date: String,
+    vacation: bool,
     instances: Vec<TaskInstance>,
     stats: DayStats,
 }
@@ -64,6 +67,9 @@ struct HistoryEntry {
     done: i64,
     failed: i64,
     completion_pct: i64,
+    xp: i64,
+    vacation: bool,
+    workout_minutes: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -123,6 +129,22 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_instances_date ON task_instances(date);
 
+        CREATE TABLE IF NOT EXISTS vacation_days (
+            date TEXT PRIMARY KEY,
+            reason TEXT NOT NULL DEFAULT ''
+        );
+
+        -- XP earned on days that aged out of the history window. Kept forever
+        -- so Rank reflects the whole journey, not just the recent 12 weeks.
+        CREATE TABLE IF NOT EXISTS xp_bank (
+            id      INTEGER PRIMARY KEY CHECK (id = 1),
+            base_xp INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS xp_banked_days (
+            date TEXT PRIMARY KEY,
+            xp   INTEGER NOT NULL DEFAULT 0
+        );
+
         CREATE TABLE IF NOT EXISTS settings (
             id                    INTEGER PRIMARY KEY CHECK (id = 1),
             theme                 TEXT NOT NULL DEFAULT 'dark',
@@ -160,6 +182,21 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     if has_color == 0 {
         let _ = conn.execute(
             "ALTER TABLE tasks ADD COLUMN color TEXT NOT NULL DEFAULT '#34d399'",
+            [],
+        );
+    }
+
+    // Migration for databases created before daily/physical task kinds existed.
+    let has_kind: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'kind'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if has_kind == 0 {
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'daily'",
             [],
         );
     }
@@ -257,6 +294,16 @@ fn sync_day_at(conn: &Connection, today: NaiveDate, now: NaiveDateTime) {
     let today_s = date_str(today);
     let now_mins = now_real_minutes(now);
 
+    // Vacation days never seed instances and never auto-fail: the day is
+    // simply empty, and streak/consistency logic treats it as a rest day.
+    if is_vacation(conn, &today_s) {
+        let _ = conn.execute(
+            "DELETE FROM task_instances WHERE date = ?1 AND status != 'done'",
+            params![today_s],
+        );
+        return;
+    }
+
     if !has_instances(conn, &today_s) {
         if today_s == date_str(routine_date(now, get_settings(conn).day_start_hour)) {
             // Fresh today: pending for every task scheduled on this weekday.
@@ -301,7 +348,7 @@ fn sync_day_at(conn: &Connection, today: NaiveDate, now: NaiveDateTime) {
 
 fn load_task(conn: &Connection, id: i64) -> Option<RoutineTask> {
     conn.query_row(
-        "SELECT id, name, icon, color, start_minute, end_minute, days_mask, created_at
+        "SELECT id, name, icon, color, start_minute, end_minute, days_mask, created_at, kind
          FROM tasks WHERE id = ?1",
         params![id],
         |r| {
@@ -314,6 +361,7 @@ fn load_task(conn: &Connection, id: i64) -> Option<RoutineTask> {
                 end_minute: r.get(5)?,
                 days_mask: r.get(6)?,
                 created_at: r.get(7)?,
+                kind: r.get(8)?,
             })
         },
     )
@@ -348,7 +396,7 @@ fn day_payload(conn: &Connection, date: &str) -> DayPayload {
     let mut stmt = conn
         .prepare(
             "SELECT ti.id, ti.task_id, ti.date, ti.status, ti.checked_at,
-                    t.id, t.name, t.icon, t.color, t.start_minute, t.end_minute, t.days_mask, t.created_at
+                    t.id, t.name, t.icon, t.color, t.start_minute, t.end_minute, t.days_mask, t.created_at, t.kind
              FROM task_instances ti
              JOIN tasks t ON t.id = ti.task_id
              WHERE ti.date = ?1
@@ -373,6 +421,7 @@ fn day_payload(conn: &Connection, date: &str) -> DayPayload {
                     end_minute: r.get(10)?,
                     days_mask: r.get(11)?,
                     created_at: r.get(12)?,
+                    kind: r.get(13)?,
                 },
             })
         })
@@ -382,9 +431,52 @@ fn day_payload(conn: &Connection, date: &str) -> DayPayload {
 
     DayPayload {
         date: date.to_string(),
+        vacation: is_vacation(conn, date),
         stats: day_counts(conn, date),
         instances,
     }
+}
+
+// ---------------------------------------------------------------------------
+// XP — physical tasks earn by duration, daily tasks are flat
+// ---------------------------------------------------------------------------
+
+/// XP earned for completing one task instance.
+/// Daily: flat 50. Physical: 1000 XP per hour of window (30m = 500,
+/// 1h = 1000, 2h = 2000), rounded to the nearest 50.
+fn task_xp(kind: &str, start_minute: i64, end_minute: i64) -> i64 {
+    if kind == "physical" {
+        let mins = (end_minute - start_minute).max(0);
+        // 1000 XP per full hour, rounded to the nearest 50.
+        ((mins as f64 / 60.0) * 1000.0 / 50.0).round() as i64 * 50
+    } else {
+        50
+    }
+}
+
+/// Minutes of completed physical-task windows on a date (workout volume).
+fn day_workout_minutes(conn: &Connection, date: &str) -> i64 {
+    conn.query_row(
+        "SELECT COALESCE(SUM(t.end_minute - t.start_minute), 0)
+         FROM task_instances ti
+         JOIN tasks t ON t.id = ti.task_id
+         WHERE ti.date = ?1 AND ti.status = 'done' AND t.kind = 'physical'",
+        params![date],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
+
+fn is_vacation(conn: &Connection, date: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM vacation_days WHERE date = ?1",
+        params![date],
+        |_| Ok(()),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +610,7 @@ fn reload_instance(conn: &Connection, instance_id: i64) -> Option<TaskInstance> 
                     end_minute: r.get(10)?,
                     days_mask: r.get(11)?,
                     created_at: r.get(12)?,
+                    kind: r.get(13)?,
                 },
             })
         },
@@ -531,7 +624,7 @@ fn reload_instance(conn: &Connection, instance_id: i64) -> Option<TaskInstance> 
 fn list_tasks(state: State<Db>) -> Result<Vec<RoutineTask>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, name, icon, color, start_minute, end_minute, days_mask, created_at FROM tasks ORDER BY start_minute")
+        .prepare("SELECT id, name, icon, color, start_minute, end_minute, days_mask, created_at, kind FROM tasks ORDER BY start_minute")
         .map_err(|e| e.to_string())?;
     let tasks = stmt
         .query_map([], map_task)
@@ -551,6 +644,7 @@ fn map_task(r: &rusqlite::Row) -> rusqlite::Result<RoutineTask> {
         end_minute: r.get(5)?,
         days_mask: r.get(6)?,
         created_at: r.get(7)?,
+        kind: r.get(8)?,
     })
 }
 
@@ -571,6 +665,9 @@ fn validate_input(input: &TaskInput) -> Result<(), String> {
     if c.len() != 7 || !c.starts_with('#') || !c[1..].chars().all(|ch| ch.is_ascii_hexdigit()) {
         return Err("Color must be a hex value like #34d399.".into());
     }
+    if input.kind != "daily" && input.kind != "physical" {
+        return Err("Task kind must be daily or physical.".into());
+    }
     Ok(())
 }
 
@@ -581,8 +678,8 @@ fn create_task(state: State<Db>, input: TaskInput) -> Result<RoutineTask, String
     let settings = get_settings(&conn);
     let now = active_now(&settings)?;
     conn.execute(
-        "INSERT INTO tasks (name, icon, color, start_minute, end_minute, days_mask, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO tasks (name, icon, color, start_minute, end_minute, days_mask, created_at, kind)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             input.name.trim(),
             input.icon,
@@ -590,7 +687,8 @@ fn create_task(state: State<Db>, input: TaskInput) -> Result<RoutineTask, String
             input.start_minute,
             input.end_minute,
             input.days_mask,
-            checked_at_str(now)
+            checked_at_str(now),
+            input.kind
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -625,7 +723,7 @@ fn update_task(state: State<Db>, id: i64, input: TaskInput) -> Result<RoutineTas
     let settings = get_settings(&conn);
     let now = active_now(&settings)?;
     conn.execute(
-        "UPDATE tasks SET name = ?2, icon = ?3, color = ?4, start_minute = ?5, end_minute = ?6, days_mask = ?7
+        "UPDATE tasks SET name = ?2, icon = ?3, color = ?4, start_minute = ?5, end_minute = ?6, days_mask = ?7, kind = ?8
          WHERE id = ?1",
         params![
             id,
@@ -634,7 +732,8 @@ fn update_task(state: State<Db>, id: i64, input: TaskInput) -> Result<RoutineTas
             input.color,
             input.start_minute,
             input.end_minute,
-            input.days_mask
+            input.days_mask,
+            input.kind
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -667,6 +766,135 @@ fn delete_task(state: State<Db>, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn set_vacation(state: State<Db>, date: String, on: bool) -> Result<DayPayload, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    if on {
+        conn.execute(
+            "INSERT OR IGNORE INTO vacation_days (date) VALUES (?1)",
+            params![date],
+        )
+        .map_err(|e| e.to_string())?;
+        // Clear the day's non-done instances so the day reads as free.
+        let _ = conn.execute(
+            "DELETE FROM task_instances WHERE date = ?1 AND status != 'done'",
+            params![date],
+        );
+    } else {
+        conn.execute("DELETE FROM vacation_days WHERE date = ?1", params![date])
+            .map_err(|e| e.to_string())?;
+        // Re-seed today's instances immediately (vacation off = back to work).
+        if date == today_str_rust(&conn)? {
+            let settings = get_settings(&conn);
+            let now = active_now(&settings)?;
+            let today = routine_date(now, settings.day_start_hour);
+            sync_day_at(&conn, today, now);
+        }
+    }
+    Ok(day_payload(&conn, &date))
+}
+
+/// Today's date string honoring the day boundary.
+fn today_str_rust(conn: &Connection) -> Result<String, String> {
+    let settings = get_settings(conn);
+    let now = active_now(&settings)?;
+    Ok(date_str(routine_date(now, settings.day_start_hour)))
+}
+
+#[tauri::command]
+fn get_xp_bank(state: State<Db>) -> Result<i64, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let xp: i64 = conn
+        .query_row(
+            "SELECT COALESCE((SELECT base_xp FROM xp_bank WHERE id = 1), 0)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    Ok(xp)
+}
+
+/// Bank the XP of every day older than `cutoff_date` that isn't banked yet.
+/// Each day's base XP (task rewards + perfect-day bonus) is multiplied by
+/// `multiplier` — the consistency stage at bank time — and stored forever.
+/// Idempotent: banked days are recorded in xp_banked_days.
+#[tauri::command]
+fn advance_xp_bank(
+    state: State<Db>,
+    cutoff_date: String,
+    multiplier: f64,
+) -> Result<(), String> {
+    NaiveDate::parse_from_str(&cutoff_date, "%Y-%m-%d")
+        .map_err(|_| "invalid cutoff date, expected YYYY-MM-DD")?;
+    let mult = if multiplier.is_finite() && multiplier >= 1.0 { multiplier } else { 1.0 };
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+
+    conn.execute("INSERT OR IGNORE INTO xp_bank (id, base_xp) VALUES (1, 0)", [])
+        .map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT date FROM task_instances
+             WHERE date < ?1 AND date NOT IN (SELECT date FROM xp_banked_days)
+             ORDER BY date",
+        )
+        .map_err(|e| e.to_string())?;
+    let dates: Vec<String> = stmt
+        .query_map(params![cutoff_date], |r| r.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .collect();
+    drop(stmt);
+
+    let mut total = 0i64;
+    for d in dates {
+        let base = day_xp(&conn, &d);
+        let granted = (base as f64 * mult).round() as i64;
+        conn.execute(
+            "INSERT INTO xp_banked_days (date, xp) VALUES (?1, ?2)",
+            params![d, granted],
+        )
+        .map_err(|e| e.to_string())?;
+        total += granted;
+    }
+    if total > 0 {
+        conn.execute(
+            "UPDATE xp_bank SET base_xp = base_xp + ?1 WHERE id = 1",
+            params![total],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Total XP earned on a date: per-task rewards + the 800 perfect-day
+/// bonus, all before the consistency multiplier (applied in the UI).
+fn day_xp(conn: &Connection, date: &str) -> i64 {
+    let mut stmt = match conn.prepare(
+        "SELECT t.kind, t.start_minute, t.end_minute FROM task_instances ti
+         JOIN tasks t ON t.id = ti.task_id
+         WHERE ti.date = ?1 AND ti.status = 'done'",
+    ) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let rows: Vec<(String, i64, i64)> = stmt
+        .query_map(params![date], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .ok()
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+
+    let s = day_counts(conn, date);
+    let mut xp: i64 = rows
+        .iter()
+        .map(|(kind, start, end)| task_xp(kind, *start, *end))
+        .sum();
+    if s.total > 0 && s.done == s.total {
+        xp += 800; // perfect-day bonus
+    }
+    xp
+}
+
+#[tauri::command]
 fn get_history(state: State<Db>, days: i64) -> Result<Vec<HistoryEntry>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let settings = get_settings(&conn);
@@ -680,12 +908,18 @@ fn get_history(state: State<Db>, days: i64) -> Result<Vec<HistoryEntry>, String>
         sync_day_at(&conn, d, now);
         let s = day_counts(&conn, &ds);
         let pct = if s.total > 0 { s.done * 100 / s.total } else { 0 };
+        let xp = day_xp(&conn, &ds);
+        let vacation = is_vacation(&conn, &ds);
+        let workout_minutes = day_workout_minutes(&conn, &ds);
         out.push(HistoryEntry {
             date: ds,
             total: s.total,
             done: s.done,
             failed: s.failed,
             completion_pct: pct,
+            xp,
+            vacation,
+            workout_minutes,
         });
     }
     Ok(out)
@@ -750,7 +984,7 @@ fn export_data(state: State<Db>) -> Result<String, String> {
 
     let tasks: Vec<serde_json::Value> = {
         let mut stmt = conn
-            .prepare("SELECT id, name, icon, color, start_minute, end_minute, days_mask, created_at FROM tasks ORDER BY id")
+            .prepare("SELECT id, name, icon, color, start_minute, end_minute, days_mask, created_at, kind FROM tasks ORDER BY id")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| {
@@ -763,6 +997,7 @@ fn export_data(state: State<Db>) -> Result<String, String> {
                     "end_minute": r.get::<_, i64>(5)?,
                     "days_mask": r.get::<_, i64>(6)?,
                     "created_at": r.get::<_, String>(7)?,
+                    "kind": r.get::<_, String>(8)?,
                 }))
             })
             .map_err(|e| e.to_string())?
@@ -793,6 +1028,30 @@ fn export_data(state: State<Db>) -> Result<String, String> {
 
     let settings = get_settings(&conn);
 
+    let banked: Vec<serde_json::Value> = {
+        let mut stmt = conn
+            .prepare("SELECT date, xp FROM xp_banked_days ORDER BY date")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(json!({
+                    "date": r.get::<_, String>(0)?,
+                    "xp": r.get::<_, i64>(1)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        rows
+    };
+    let bank_xp: i64 = conn
+        .query_row(
+            "SELECT COALESCE((SELECT base_xp FROM xp_bank WHERE id = 1), 0)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
     Ok(serde_json::to_string_pretty(&json!({
         "app": "Grounded",
         "version": 1,
@@ -800,8 +1059,22 @@ fn export_data(state: State<Db>) -> Result<String, String> {
         "settings": settings,
         "tasks": tasks,
         "instances": instances,
+        "vacation_days": vacation_days(&conn),
+        "xp_bank": bank_xp,
+        "xp_banked_days": banked,
     }))
     .map_err(|e| e.to_string())?)
+}
+
+fn vacation_days(conn: &Connection) -> Vec<String> {
+    let mut stmt = match conn.prepare("SELECT date FROM vacation_days ORDER BY date") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map([], |r| r.get::<_, String>(0))
+        .ok()
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -832,7 +1105,10 @@ pub fn run() {
             get_streak,
             get_settings_cmd,
             save_settings_cmd,
-            export_data
+            export_data,
+            set_vacation,
+            advance_xp_bank,
+            get_xp_bank
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1044,6 +1320,7 @@ mod tests {
     #[test]
     fn validate_rejects_bad_windows() {
         let ok = TaskInput {
+            kind: "daily".into(),
             name: "x".into(),
             icon: "💧".into(),
             color: "#34d399".into(),

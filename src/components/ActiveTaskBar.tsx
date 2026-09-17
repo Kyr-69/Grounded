@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/lib/store";
 import { withAlpha, safeColor } from "@/lib/colors";
+import { nativeShowProgress, nativeHideProgress } from "@/lib/nativeNotify";
 import { EmojiIcon } from "@/components/EmojiIcon";
 import { cn } from "@/lib/utils";
+
+function fmtClock(minute: number): string {
+  const h24 = Math.floor(minute / 60) % 24;
+  const m = minute % 60;
+  const ampm = h24 >= 12 ? "PM" : "AM";
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
 
 /**
  * Persistent "now" strip: the task whose window is currently open,
@@ -33,8 +42,20 @@ export function ActiveTaskBar() {
       color: safeColor(inst.task.color),
       pct: span > 0 ? Math.round((elapsed / span) * 100) : 0,
       minsLeft: inst.task.end_minute - nowMins,
+      endsAt: inst.task.end_minute,
     };
   }, [day, nowMins]);
+
+  // Mirror the active window into the native ongoing notification
+  // (Android only; no-ops in browser/desktop). Runs after `active` exists.
+  useEffect(() => {
+    if (active) {
+      nativeShowProgress(active.name, fmtClock(active.endsAt), active.pct);
+    } else {
+      nativeHideProgress();
+    }
+    return () => nativeHideProgress();
+  }, [active?.id, active?.pct]);
 
   if (!active) return null;
 

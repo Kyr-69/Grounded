@@ -40,6 +40,10 @@ const RANK_DEFS: { name: string; minXp: number }[] = [
   { name: "Elite I", minXp: 110_000 },
   { name: "Elite II", minXp: 130_000 },
   { name: "Elite III", minXp: 150_000 },
+  { name: "Elite+", minXp: 200_000 },
+  { name: "Elite++", minXp: 300_000 },
+  { name: "Elite+++", minXp: 500_000 },
+  { name: "Legend", minXp: 1_000_000 },
 ];
 
 const RANK_COLORS = [
@@ -49,13 +53,20 @@ const RANK_COLORS = [
   "#7dd3fc", // platinum
   "#a5b4fc", // diamond
   "#f472b6", // elite
+  "#fbbf24", // legend
 ];
+
+function colorFor(index: number): string {
+  if (index >= RANK_DEFS.length - 1) return RANK_COLORS[6]; // Legend
+  if (index >= 18) return RANK_COLORS[5]; // Elite+ family stays elite pink
+  return RANK_COLORS[Math.floor(index / 3)];
+}
 
 export const RANKS: Rank[] = RANK_DEFS.map((r, i) => ({
   id: i + 1,
   name: r.name,
   minXp: r.minXp,
-  color: RANK_COLORS[Math.floor(i / 3)],
+  color: colorFor(i),
 }));
 
 // ---------------------------------------------------------------------------

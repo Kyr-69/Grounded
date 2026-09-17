@@ -24,3 +24,7 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Signing
+keystore.properties
+*.keystore
